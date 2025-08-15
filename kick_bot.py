@@ -1,164 +1,242 @@
-import requests
-import json
-import websocket
+import flask
 import threading
-import time
-from flask import Flask, request, jsonify
+import asyncio
+import json
+import hmac
+import hashlib
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import serialization
+from cryptography.exceptions import InvalidSignature
+from multishock_client import MultiShockClient
 
-app = Flask(__name__)
+# --- Configuration ---
+MULTISHOCK_AUTH_KEY = "your_auth_key_here"
+KICK_API_TOKEN = "your_kick_api_token_here"
+KICK_BROADCASTER_ID = "your_kick_broadcaster_id_here"
+DEFAULT_SUB_TIER = "1000"  # Default to Tier 1
 
-# Global variable to hold the WebSocketApp instance
-ws_app = None
+# Kick's public key for webhook signature verification
+KICK_PUBLIC_KEY = """
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq/+l1WnlRrGSolDMA+A8
+6rAhMbQGmQ2SapVcGM3zq8ANXjnhDWocMqfWcTd95btDydITa10kDvHzw9WQOqp2
+MZI7ZyrfzJuz5nhTPCiJwTwnEtWft7nV14BYRDHvlfqPUaZ+1KR4OCaO/wWIk/rQ
+L/TjY0M70gse8rlBkbo2a8rKhu69RQTRsoaf4DVhDPEeSeI5jVrRDGAMGL3cGuyY
+6CLKGdjVEM78g3JfYOvDU/RvfqD7L89TZ3iN94jrmWdGz34JNlEI5hqK8dd7C5EF
+BEbZ5jgB8s8ReQV8H+MkuffjdAj3ajDDX3DOJMIut1lBrUVD1AaSrGCKHooWoL2e
+twIDAQAB
+-----END PUBLIC KEY-----
+"""
 
-def subscribe_to_events(authorization_header, broadcaster_id, webhook_url):
+app = flask.Flask(__name__)
+multishock_client = MultiShockClient(MULTISHOCK_AUTH_KEY)
+kick_public_key = serialization.load_pem_public_key(KICK_PUBLIC_KEY.encode())
+
+def verify_signature(request):
     """
-    Subscribes to Kick events via webhooks.
+    Verifies the signature of a webhook request from Kick.
     """
-    url = "https://api.kick.com/public/v1/events/subscriptions"
+    signature_header = request.headers.get('Kick-Event-Signature')
+    message_id = request.headers.get('Kick-Event-Message-Id')
+    timestamp = request.headers.get('Kick-Event-Message-Timestamp')
 
-    headers = {
-        "Authorization": authorization_header,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
+    if not signature_header or not message_id or not timestamp:
+        return False
 
-    # A list of all events we want to subscribe to.
-    events = [
-        {"name": "chat.message.sent"},
-        {"name": "channel.followed"},
-        {"name": "channel.subscription.new"},
-        {"name": "channel.subscription.renewal"},
-        {"name": "channel.subscription.gifts"}
-    ]
+    signature_body = f"{message_id}.{timestamp}.{request.data.decode('utf-8')}"
 
-    for event in events:
-        payload = {
-            "broadcaster_user_id": broadcaster_id,
-            "events": [event],
-            "method": "webhook",
-            "webhook_url": webhook_url
-        }
+    try:
+        kick_public_key.verify(
+            bytes.fromhex(signature_header),
+            signature_body.encode('utf-8'),
+            padding.PKCS1v15(),
+            hashes.SHA256()
+        )
+        return True
+    except InvalidSignature:
+        return False
 
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=10)
-            response.raise_for_status()
-            print(f"Successfully subscribed to {event['name']}.")
-        except requests.exceptions.RequestException as e:
-            print(f"An error occurred while subscribing to {event['name']}: {e}")
-
-@app.route('/webhook', methods=['POST'])
+@app.route('/kick/webhook', methods=['POST'])
 def kick_webhook():
     """
-    Receives webhook events from Kick.
+    This endpoint receives webhook events from Kick.
     """
-    event_type = request.headers.get("Kick-Event-Type")
-    data = request.json
+    if not verify_signature(flask.request):
+        return 'Signature verification failed', 401
 
-    print(f"Received event: {event_type}")
-    print("Data:", json.dumps(data, indent=2))
+    event_type = flask.request.headers.get('Kick-Event-Type')
+    event_data = flask.request.json
 
-    formatted_payload = format_event(event_type, data)
-
-    if formatted_payload and ws_app and ws_app.sock and ws_app.sock.connected:
-        try:
-            ws_app.send(json.dumps(formatted_payload))
-            print(f"Sent event to MultiShock: {formatted_payload['cmd']}")
-        except Exception as e:
-            print(f"Error sending to MultiShock: {e}")
+    if event_type == 'channel.followed':
+        handle_follow(event_data)
+    elif event_type == 'channel.subscription.new':
+        handle_subscription(event_data)
+    elif event_type == 'channel.subscription.gifts':
+        handle_gifted_subscription(event_data)
+    elif event_type == 'channel.subscription.renewal':
+        handle_resubscription(event_data)
 
     return '', 200
 
-def format_event(event_type, data):
+def handle_follow(data):
     """
-    Formats the event data into the structure expected by MultiShock.
+    Handles a channel.followed event.
     """
-    if event_type == "chat.message.sent":
-        return {
-            "cmd": "chat_message",
-            "value": {
-                "username": data["sender"]["username"],
-                "message": data["content"]
-            }
-        }
-    elif event_type == "channel.followed":
-        return {
-            "cmd": "follow",
-            "value": {
-                "username": data["follower"]["username"]
-            }
-        }
-    elif event_type == "channel.subscription.new":
-        return {
-            "cmd": "subscribe",
-            "value": {
-                "username": data["subscriber"]["username"],
-                "months": 1
-            }
-        }
-    elif event_type == "channel.subscription.renewal":
-        return {
-            "cmd": "resubscribe",
-            "value": {
-                "username": data["subscriber"]["username"],
-                "months": data["duration"]
-            }
-        }
-    elif event_type == "channel.subscription.gifts":
-        # MultiShock expects a separate event for each gifted sub
-        # We will handle this in the future if needed
-        return {
-            "cmd": "gift_subscribe",
-            "value": {
-                "gifter": data["gifter"]["username"],
-                "count": len(data["giftees"])
-            }
-        }
-    # We don't have a direct equivalent for "redeems" yet.
-    # This will be implemented if Kick adds a similar feature.
-    return None
-
-def start_multishock_ws():
-    global ws_app
-    ws_app = websocket.WebSocketApp("ws://localhost:8765/",
-                                     on_open=on_open,
-                                     on_message=on_message,
-                                     on_error=on_error,
-                                     on_close=on_close)
-    ws_thread = threading.Thread(target=ws_app.run_forever)
-    ws_thread.daemon = True
-    ws_thread.start()
-
-def on_open(ws):
-    print("Connected to MultiShock WebSocket.")
-    identify_payload = {
-        "cmd": "identify",
-        "value": "Kick"
+    print(f"New follower: {data['follower']['username']}")
+    payload = {
+        "cmd": "channel.follow",
+        "value": {
+            "user_id": str(data['follower']['user_id']),
+            "user_login": data['follower']['channel_slug'],
+            "user_name": data['follower']['username'],
+            "broadcaster_user_id": str(data['broadcaster']['user_id']),
+            "broadcaster_user_login": data['broadcaster']['channel_slug'],
+            "broadcaster_user_name": data['broadcaster']['username'],
+            "followed_at": data['created_at']
+        },
+        "auth_key": MULTISHOCK_AUTH_KEY
     }
-    ws.send(json.dumps(identify_payload))
+    asyncio.run(multishock_client.websocket.send(json.dumps(payload)))
 
-def on_message(ws, message):
-    print(f"Received from MultiShock: {message}")
 
-def on_error(ws, error):
-    print(f"MultiShock WebSocket error: {error}")
+def handle_subscription(data):
+    """
+    Handles a channel.subscription.new event.
+    """
+    print(f"New subscription from {data['subscriber']['username']}")
+    payload = {
+        "cmd": "channel.subscribe",
+        "value": {
+            "user_id": str(data['subscriber']['user_id']),
+            "user_login": data['subscriber']['channel_slug'],
+            "user_name": data['subscriber']['username'],
+            "broadcaster_user_id": str(data['broadcaster']['user_id']),
+            "broadcaster_user_login": data['broadcaster']['channel_slug'],
+            "broadcaster_user_name": data['broadcaster']['username'],
+            "tier": DEFAULT_SUB_TIER,
+            "is_gift": False
+        },
+        "auth_key": MULTISHOCK_AUTH_KEY
+    }
+    asyncio.run(multishock_client.websocket.send(json.dumps(payload)))
 
-def on_close(ws, close_status_code, close_msg):
-    print("MultiShock WebSocket connection closed.")
 
-if __name__ == "__main__":
-    start_multishock_ws()
+def handle_gifted_subscription(data):
+    """
+    Handles a channel.subscription.gifts event.
+    """
+    gifter = data['gifter']['username'] or 'Anonymous'
+    giftee_count = len(data['giftees'])
+    print(f"{gifter} gifted {giftee_count} subs!")
 
-    print("This script now runs a web server to receive webhooks from Kick.")
-    print("You will need to use a tool like ngrok to expose this server to the internet.")
-    print("Run ngrok with the command: ngrok http 5000")
-    print("Then, provide the ngrok URL (e.g., https://xxxx-xxxx.ngrok.io) to subscribe to events.")
+    payload = {
+        "cmd": "channel.subscription.gift",
+        "value": {
+            "user_id": str(data['gifter']['user_id']) if data['gifter']['user_id'] else None,
+            "user_login": data['gifter']['channel_slug'],
+            "user_name": gifter,
+            "broadcaster_user_id": str(data['broadcaster']['user_id']),
+            "broadcaster_user_login": data['broadcaster']['channel_slug'],
+            "broadcaster_user_name": data['broadcaster']['username'],
+            "total": giftee_count,
+            "tier": DEFAULT_SUB_TIER,
+            "is_anonymous": data['gifter']['username'] is None
+        },
+        "auth_key": MULTISHOCK_AUTH_KEY
+    }
+    asyncio.run(multishock_client.websocket.send(json.dumps(payload)))
 
-    webhook_url = input("Enter your ngrok webhook URL (e.g., https://xxxx-xxxx.ngrok.io/webhook): ")
-    authorization_header = input("Enter your Authorization header value (including 'Bearer '): ")
-    broadcaster_id = input("Enter your Kick broadcaster ID: ")
 
-    if webhook_url and authorization_header and broadcaster_id:
-        subscribe_to_events(authorization_header, int(broadcaster_id), webhook_url)
-        app.run(port=5000)
+def handle_resubscription(data):
+    """
+    Handles a channel.subscription.renewal event.
+    """
+    print(f"{data['subscriber']['username']} resubscribed for {data['duration']} months!")
+    payload = {
+        "cmd": "channel.subscription.message",
+        "value": {
+            "user_id": str(data['subscriber']['user_id']),
+            "user_login": data['subscriber']['channel_slug'],
+            "user_name": data['subscriber']['username'],
+            "broadcaster_user_id": str(data['broadcaster']['user_id']),
+            "broadcaster_user_login": data['broadcaster']['channel_slug'],
+            "broadcaster_user_name": data['broadcaster']['username'],
+            "message": {
+                "text": "",
+                "emotes": None
+            },
+            "tier": DEFAULT_SUB_TIER,
+            "cumulative_months": data['duration'],
+            "streak_months": None, # Not provided by Kick API
+            "duration_months": data['duration']
+        },
+        "auth_key": MULTISHOCK_AUTH_KEY
+    }
+    asyncio.run(multishock_client.websocket.send(json.dumps(payload)))
+
+
+def run_flask_app():
+    """
+    Runs the Flask app in a separate thread.
+    """
+    # Note: When running this script, you will need to use a tool like ngrok
+    # to expose this local endpoint to the public internet. For example:
+    # ngrok http 5000
+    # Then, you will need to configure the generated public URL (e.g.,
+    # https://xxxx-xxxx-xxxx.ngrok.io/kick/webhook) in your Kick developer
+    # settings.
+    app.run(port=5000)
+
+import requests
+
+def subscribe_to_kick_events():
+    """
+    Subscribes to the necessary Kick events.
+    """
+    events = [
+        {'name': 'channel.followed', 'version': 1},
+        {'name': 'channel.subscription.new', 'version': 1},
+        {'name': 'channel.subscription.gifts', 'version': 1},
+        {'name': 'channel.subscription.renewal', 'version': 1}
+    ]
+    headers = {
+        'Authorization': f'Bearer {KICK_API_TOKEN}',
+        'Content-Type': 'application/json'
+    }
+    data = {
+        'broadcaster_user_id': KICK_BROADCASTER_ID,
+        'events': events,
+        'method': 'webhook'
+    }
+    response = requests.post('https://api.kick.com/public/v1/events/subscriptions', headers=headers, json=data)
+    if response.status_code == 200:
+        print("Successfully subscribed to events")
     else:
-        print("Missing required information. Exiting.")
+        print(f"Failed to subscribe to events: {response.text}")
+
+async def main():
+    """
+    Main function to connect to the Multishock server and start the Flask app.
+    """
+    await multishock_client.connect()
+
+    subscribe_to_kick_events()
+
+    # Start the Flask app in a background thread
+    flask_thread = threading.Thread(target=run_flask_app)
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    print("Kick to Multishock bridge is running.")
+    # The main thread will continue to run, keeping the script alive.
+    while True:
+        await asyncio.sleep(1)
+
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Shutting down...")
+        asyncio.run(multishock_client.close())

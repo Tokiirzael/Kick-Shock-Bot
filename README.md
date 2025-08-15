@@ -1,65 +1,83 @@
----
-icon: hand-wave
-cover: .gitbook/assets/hero (1).png
-coverY: 0
-layout:
-  cover:
-    visible: true
-    size: full
-  title:
-    visible: true
-  description:
-    visible: false
-  tableOfContents:
-    visible: true
-  outline:
-    visible: true
-  pagination:
-    visible: true
----
+# Kick to Multishock Bridge
 
-# Welcome
+This application acts as a bridge between Kick's webhook events and the Multishock application. It allows you to trigger actions in Multishock based on events from your Kick channel, such as follows, subscriptions, and gifted subscriptions.
 
-Hey there! Welcome to the KICK Dev Docs 👋
+## Features
 
-We’re excited to launch KICK’s Public API and officially welcome third-party developers into the KICK ecosystem.
+-   Receives webhook events from Kick for:
+    -   Follows
+    -   New Subscriptions
+    -   Gifted Subscriptions
+    -   Resubscriptions
+-   Connects to the Multishock WebSocket server.
+-   Formats and sends event data to Multishock to trigger actions.
+-   Securely verifies incoming webhooks using Kick's public key.
 
-Our first release contains a number of endpoints that cover a wide range of functionality on KICK.
+## Limitations
 
-We have more in the pipeline and are eager to collaborate with the community to better understand your top priorities.
+This bridge has the following limitations due to the current capabilities of the Kick API:
 
-We’ve made it easy to submit feedback and contribute. Our team is listening to the feedback to guide our next steps.
+-   **Channel Point Redemptions:** The Kick API does not currently provide an event for channel point redemptions (or a similar feature like "Kicks"). Therefore, this bridge **cannot** react to these events.
+-   **Subscription Tiers:** The Kick API does not provide subscription tier information in its webhook payloads. This bridge will use a default value for the subscription tier, which can be configured in the `kick_bot.py` script.
 
-### Feedback
+## Getting Started
 
-We love contributions! Feel free to check out our [CONTRIBUTING.md](CONTRIBUTING.md) for more information on submitting improvements or raising issues.
+Follow these steps to set up and run the Kick to Multishock bridge.
 
-Following many other open-source projects, we will use GitHub as our central point of feedback, bug reports and feature requests for the API. All this documentation is stored within a repository which we will make publicly accessible, to allow the community to contribute to the project. We might even look at publishing a public road map there, but we aren't at that stage yet.
+### 1. Create a Kick Developer Application
 
-#### Short term feedback
+1.  Go to your Kick Account Settings and select the [Developer](https://kick.com/settings/developer) tab.
+2.  Click "Create App" and fill in the required information.
+3.  For the "Redirect URI", you can use `http://localhost:5000/callback` for the authentication script.
+4.  Once your app is created, you will get a **Client ID** and a **Client Secret**. Keep these safe.
 
-While we’ll be very active on GitHub Issues, we also welcome quick feedback and discussions in our [Discord channel](https://discord.gg/SvyWXP5aWb). Here, you can ask questions, share your creations, and engage in conversations to help improve the API and the community experience!
+### 2. Get Your Authentication Tokens
 
-## API Roadmap
+To allow the bridge to access your Kick channel data, you need to get an access token and a refresh token using the provided `kick_auth.py` script.
 
-We're rapidly building a world-class Public API with the following table highlighting the current status of various features available to developers.
+1.  Run the authentication script:
+    ```bash
+    python kick_auth.py
+    ```
+2.  The script will prompt you for your Client ID, Client Secret, and Redirect URI. Enter the values from the Kick developer app you created in the previous step.
+3.  The script will generate a URL. Open this URL in your browser, log in to your Kick account, and authorize the application.
+4.  After authorizing, you will be redirected to your Redirect URI. The URL in your browser's address bar will contain a `code` parameter (e.g., `http://localhost:5000/callback?code=...&state=...`).
+5.  Copy the value of the `code` parameter and paste it into the terminal where the `kick_auth.py` script is running.
+6.  The script will then fetch and print your **Access Token** and **Refresh Token**. Copy these tokens.
 
-Our goals during this phase is to get feedback and iterate quickly. We want to create a well-crafted, stable API that works together seamlessly which means we will be continually improving the API. We will keep you up-to-date with what we are cooking.
+### 3. Configure the Bridge
 
-Check out our Public Roadmap [here](https://github.com/orgs/KickEngineering/projects/3).
+Open the `kick_bot.py` file and fill in the following configuration variables at the top of the file:
 
-## Changelog
+-   `MULTISHOCK_AUTH_KEY`: Your Multishock authentication key.
+-   `KICK_API_TOKEN`: The **Access Token** you obtained in the previous step.
+-   `KICK_BROADCASTER_ID`: The ID of the Kick channel you want to monitor. You can find this by going to your channel on Kick and looking at the URL (e.g., `https://kick.com/your_channel_name`). Then, use a tool like Postman or `curl` to make a GET request to `https://api.kick.com/api/v2/channels/{your_channel_name}` to get the user ID.
+-   `DEFAULT_SUB_TIER`: The default subscription tier to use (e.g., "1000" for Tier 1).
 
-| Date       | Description                                              |
-| ---------- | ---------------------------------------------------------|
-| 28/07/2025 | Allow multiple broadcaster_user_id params on livestreams |
-| 22/07/2025 | Added created_at to chat message payload                 |
-| 23/05/2025 | Added moderation banned webhook event                    |
-| 21/05/2025 | Added moderation endpoints                               |
-| 05/05/2025 | Added livestream metadata webhook event                  |
-| 15/04/2025 | Added reply chat message                                 |
-| 08/04/2025 | Added get channels by slug                               |
-| 08/04/2025 | Added thumbnail to channels response                     |
-| 07/04/2025 | Added expires_at to channel subscriptions payload        |
-| 07/04/2025 | Added identity object to chat sender payload             |
-| 01/04/2025 | Added livestreams endpoint                               |
+### 4. Expose Your Webhook
+
+The Kick API needs to be able to send events to your local machine. To do this, you need to expose your local server to the public internet. A tool like `ngrok` can be used for this.
+
+1.  Install `ngrok` by following the instructions on their website.
+2.  Run the following command to create a public tunnel to your local port 5000:
+    ```bash
+    ngrok http 5000
+    ```
+3.  `ngrok` will give you a public URL (e.g., `https://xxxx-xxxx-xxxx.ngrok.io`). Copy this URL.
+4.  Go back to your Kick developer application settings and set the "Webhook URL" to your `ngrok` URL, followed by `/kick/webhook`. For example:
+    `https://xxxx-xxxx-xxxx.ngrok.io/kick/webhook`
+
+### 5. Run the Bridge
+
+Now you are ready to run the bridge.
+
+1.  Make sure you have installed the required dependencies:
+    ```bash
+    pip install flask websockets zeroconf requests cryptography
+    ```
+2.  Run the `kick_bot.py` script:
+    ```bash
+    python kick_bot.py
+    ```
+
+The bridge will now be running and listening for events from Kick. When an event is received, it will be sent to your Multishock application to trigger the corresponding action.
