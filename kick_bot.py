@@ -2,13 +2,12 @@ import flask
 import threading
 import asyncio
 import json
-import hmac
-import hashlib
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 from multishock_client import MultiShockClient
+import requests
 
 # --- Configuration ---
 MULTISHOCK_AUTH_KEY = "your_auth_key_here"
@@ -94,10 +93,9 @@ def handle_follow(data):
             "broadcaster_user_login": data['broadcaster']['channel_slug'],
             "broadcaster_user_name": data['broadcaster']['username'],
             "followed_at": data['created_at']
-        },
-        "auth_key": MULTISHOCK_AUTH_KEY
+        }
     }
-    asyncio.run(multishock_client.websocket.send(json.dumps(payload)))
+    asyncio.run(multishock_client.send_command(payload))
 
 
 def handle_subscription(data):
@@ -116,10 +114,9 @@ def handle_subscription(data):
             "broadcaster_user_name": data['broadcaster']['username'],
             "tier": DEFAULT_SUB_TIER,
             "is_gift": False
-        },
-        "auth_key": MULTISHOCK_AUTH_KEY
+        }
     }
-    asyncio.run(multishock_client.websocket.send(json.dumps(payload)))
+    asyncio.run(multishock_client.send_command(payload))
 
 
 def handle_gifted_subscription(data):
@@ -142,10 +139,9 @@ def handle_gifted_subscription(data):
             "total": giftee_count,
             "tier": DEFAULT_SUB_TIER,
             "is_anonymous": data['gifter']['username'] is None
-        },
-        "auth_key": MULTISHOCK_AUTH_KEY
+        }
     }
-    asyncio.run(multishock_client.websocket.send(json.dumps(payload)))
+    asyncio.run(multishock_client.send_command(payload))
 
 
 def handle_resubscription(data):
@@ -170,25 +166,16 @@ def handle_resubscription(data):
             "cumulative_months": data['duration'],
             "streak_months": None, # Not provided by Kick API
             "duration_months": data['duration']
-        },
-        "auth_key": MULTISHOCK_AUTH_KEY
+        }
     }
-    asyncio.run(multishock_client.websocket.send(json.dumps(payload)))
+    asyncio.run(multishock_client.send_command(payload))
 
 
 def run_flask_app():
     """
     Runs the Flask app in a separate thread.
     """
-    # Note: When running this script, you will need to use a tool like ngrok
-    # to expose this local endpoint to the public internet. For example:
-    # ngrok http 5000
-    # Then, you will need to configure the generated public URL (e.g.,
-    # https://xxxx-xxxx-xxxx.ngrok.io/kick/webhook) in your Kick developer
-    # settings.
     app.run(port=5000)
-
-import requests
 
 def subscribe_to_kick_events():
     """
@@ -205,7 +192,7 @@ def subscribe_to_kick_events():
         'Content-Type': 'application/json'
     }
     data = {
-        'broadcaster_user_id': KICK_BROADCASTER_ID,
+        'broadcaster_user_id': int(KICK_BROADCASTER_ID),
         'events': events,
         'method': 'webhook'
     }
@@ -221,17 +208,16 @@ async def main():
     """
     await multishock_client.connect()
 
-    subscribe_to_kick_events()
+    if multishock_client.websocket:
+        subscribe_to_kick_events()
 
-    # Start the Flask app in a background thread
-    flask_thread = threading.Thread(target=run_flask_app)
-    flask_thread.daemon = True
-    flask_thread.start()
+        flask_thread = threading.Thread(target=run_flask_app)
+        flask_thread.daemon = True
+        flask_thread.start()
 
-    print("Kick to Multishock bridge is running.")
-    # The main thread will continue to run, keeping the script alive.
-    while True:
-        await asyncio.sleep(1)
+        # The main thread will continue to run, keeping the script alive.
+        while True:
+            await asyncio.sleep(1)
 
 
 if __name__ == '__main__':
@@ -239,4 +225,5 @@ if __name__ == '__main__':
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Shutting down...")
-        asyncio.run(multishock_client.close())
+        if multishock_client.websocket:
+            asyncio.run(multishock_client.close())

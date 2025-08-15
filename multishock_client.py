@@ -56,9 +56,10 @@ class MultiShockClient:
 
         print(f"Attempting to connect to {self.uri}...")
         try:
+            # The API documentation doesn't mention an identify/auth step,
+            # so we will just connect and assume the auth_key is validated on each command.
             self.websocket = await websockets.connect(self.uri, open_timeout=10)
-            print("Connection established.")
-            await self.authenticate()
+            print("Connection established. Waiting for Kick events...")
         except asyncio.TimeoutError:
             print("Connection timed out. Please ensure the Multishock server is running and accessible.")
             self.websocket = None
@@ -66,47 +67,16 @@ class MultiShockClient:
             print(f"An error occurred during connection: {e}")
             self.websocket = None
 
-
-    async def authenticate(self):
+    async def send_command(self, payload):
         """
-        Authenticates with the MultiShock WebSocket server.
-        """
-        if not self.websocket:
-            print("Cannot authenticate, no WebSocket connection.")
-            return
-
-        print("Authenticating...")
-        payload = {
-            "cmd": "identify",
-            "value": "Kick",
-            "auth_key": self.auth_key
-        }
-        await self.websocket.send(json.dumps(payload))
-        response = await self.websocket.recv()
-        print(f"Authentication response: {response}")
-
-    async def send_operate_command(self, intensity, duration, shocker_option, action, shocker_ids=[], device_ids=[], warning=False, held=False):
-        """
-        Sends an operate command to the MultiShock WebSocket server.
+        Sends a command to the MultiShock WebSocket server.
         """
         if not self.websocket:
             print("Cannot send command, no WebSocket connection.")
             return
 
-        payload = {
-            "cmd": "operate",
-            "value": {
-                "intensity": intensity,
-                "duration": duration,
-                "shocker_option": shocker_option,
-                "action": action,
-                "shocker_ids": shocker_ids,
-                "device_ids": device_ids,
-                "warning": warning,
-                "held": held
-            },
-            "auth_key": self.auth_key
-        }
+        # Add the auth key to every command, as per the documentation
+        payload['auth_key'] = self.auth_key
         await self.websocket.send(json.dumps(payload))
 
     async def close(self):

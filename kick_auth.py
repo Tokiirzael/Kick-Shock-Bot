@@ -49,11 +49,11 @@ def main():
 
     code_verifier, code_challenge = generate_pkce_challenge()
 
+    # Corrected scopes based on the official documentation
     scopes = [
         "channel:read",
-        "chat:read",
         "chat:write",
-        "events:read"
+        "events:subscribe"
     ]
     scope_string = "+".join(scopes)
 
@@ -65,13 +65,13 @@ def main():
         f"scope={scope_string}&"
         f"code_challenge={code_challenge}&"
         f"code_challenge_method=S256&"
-        f"state=random_state"  # You can generate a random state here
+        f"state=random_state"
     )
 
-    print("\n1. Open the following URL in your browser and authorize the application:")
+    print("\n1. Open the following URL in your browser. It should now ask for the correct permissions, including subscribing to events.")
     print(auth_url)
 
-    code = input("\n2. After authorizing, you will be redirected. Paste the 'code' from the redirect URL here: ")
+    code = input("\n2. After authorizing, paste the 'code' from the redirect URL here: ")
 
     tokens = get_access_token(client_id, client_secret, redirect_uri, code, code_verifier)
 
@@ -79,7 +79,7 @@ def main():
         print("\nAuthentication successful!")
         print("Access Token:", tokens['access_token'])
         print("Refresh Token:", tokens['refresh_token'])
-        print("\nCopy these tokens and paste them into your bot's configuration.")
+        print("\nCopy the new Access Token and paste it into your kick_bot.py configuration.")
 
 if __name__ == '__main__':
     main()

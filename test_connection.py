@@ -5,7 +5,8 @@ async def test_connection():
     uri = "ws://localhost:8765"
     print(f"Attempting to connect to {uri}...")
     try:
-        async with websockets.connect(uri) as websocket:
+        # Using open_timeout for compatibility with older Python versions
+        async with websockets.connect(uri, open_timeout=10) as websocket:
             print("Connection successful!")
     except Exception as e:
         print(f"Connection failed: {e}")

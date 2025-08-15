@@ -40,7 +40,7 @@ To allow the bridge to access your Kick channel data, you need to get an access 
     python kick_auth.py
     ```
 2.  The script will prompt you for your Client ID, Client Secret, and Redirect URI. Enter the values from the Kick developer app you created in the previous step.
-3.  The script will generate a URL. Open this URL in your browser, log in to your Kick account, and authorize the application.
+3.  The script will generate a URL. Open this URL in your browser, log in to your Kick account, and authorize the application. It should ask for permissions to "Read channel info", "Write to chat", and "Subscribe to events".
 4.  After authorizing, you will be redirected to your Redirect URI. The URL in your browser's address bar will contain a `code` parameter (e.g., `http://localhost:5000/callback?code=...&state=...`).
 5.  Copy the value of the `code` parameter and paste it into the terminal where the `kick_auth.py` script is running.
 6.  The script will then fetch and print your **Access Token** and **Refresh Token**. Copy these tokens.
@@ -49,7 +49,7 @@ To allow the bridge to access your Kick channel data, you need to get an access 
 
 Open the `kick_bot.py` file and fill in the following configuration variables at the top of the file:
 
--   `MULTISHOCK_AUTH_KEY`: Your Multishock authentication key.
+-   `MULTISHOCK_AUTH_KEY`: Your Multishock authentication key. You can find this in your Multishock application's settings.
 -   `KICK_API_TOKEN`: The **Access Token** you obtained in the previous step.
 -   `KICK_BROADCASTER_ID`: The ID of the Kick channel you want to monitor. You can find this by going to your channel on Kick and looking at the URL (e.g., `https://kick.com/your_channel_name`). Then, use a tool like Postman or `curl` to make a GET request to `https://api.kick.com/api/v2/channels/{your_channel_name}` to get the user ID.
 -   `DEFAULT_SUB_TIER`: The default subscription tier to use (e.g., "1000" for Tier 1).
